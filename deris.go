@@ -62,6 +62,10 @@ func handleConnection(conn net.Conn, kv map[string]string) {
 				continue
 			}
 			delete(kv, args[1])
+
+		case "EXIT":
+			fmt.Fprintln(conn, "-- Quitting session...")
+			conn.Close()
 		}
 	}
 }
