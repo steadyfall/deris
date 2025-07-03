@@ -1,0 +1,28 @@
+# [START] below taken from https://github.com/github/gitignore/blob/main/Go.gitignore 
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# env file
+.env
+
+# Editor/IDE
+.vscode/
+
+# [END] 
+
+# snapshot
+snapshot.log
