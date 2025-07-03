@@ -70,13 +70,15 @@ func handleConnection(conn net.Conn, kv map[string]string) {
 	}
 }
 
-func main() {
+func StartServer(port uint64) {
 	db := make(map[string]string)
-	lis, err := net.Listen("tcp", ":6969")
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("server started on port 6969")
+
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
@@ -84,4 +86,9 @@ func main() {
 		}
 		go handleConnection(conn, db)
 	}
+}
+
+func main() {
+	var srvPort uint64 = 6969
+	StartServer(srvPort)
 }
