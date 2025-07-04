@@ -2,29 +2,90 @@ package deris
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
 )
 
-func loadSnapshot(kv map[string]string, logFile string) {
+func generateSHA256(filename string) ([]byte, error) {
+	fileContent, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	checksum := sha256.Sum256(fileContent)
+	return checksum[:], nil
+}
+
+func loadSnapshot(kv map[string]string, logFile string) error {
 	fmt.Printf("loading data from %s :)\n", logFile)
-	snapshot, _ := os.Open(logFile)
+	snapshot, err := os.OpenFile(logFile, os.O_RDWR, 0644)
+	if err != nil {
+		return fmt.Errorf("error opening AOF file for R/W: %w", err)
+	}
+	defer snapshot.Close()
+
+	var expectedChecksum string
 	scanner := bufio.NewScanner(snapshot)
+	hasher := sha256.New()
+	contentSize := int64(0)
 	for scanner.Scan() {
 		line := scanner.Text()
 		args := strings.Fields(line)
 		cmd := strings.ToUpper(args[0])
 		switch cmd {
 		case "SET":
+			if len(args[1:]) != 2 {
+				return fmt.Errorf("%s | %s", line, "invalid number of arguments")
+			}
+			n, err := hasher.Write([]byte(line + "\n"))
+			if err != nil {
+				return fmt.Errorf("failed to hash content: %w", err)
+			}
+			contentSize += int64(n)
 			key, val := args[1], args[2]
 			kv[key] = val
 		case "DEL":
+			if len(args[1:]) != 1 {
+				return fmt.Errorf("%s | %s", line, "invalid number of arguments")
+			}
+			n, err := hasher.Write([]byte(line + "\n"))
+			if err != nil {
+				return fmt.Errorf("failed to hash content: %w", err)
+			}
+			contentSize += int64(n)
 			delete(kv, args[1])
+		case "SHA256:":
+			if len(args[1:]) != 1 {
+				return fmt.Errorf("%s | %s", line, "invalid number of arguments")
+			}
+			expectedChecksum = args[1]
+			if len(expectedChecksum) != 64 {
+				return fmt.Errorf("sha256 integrity not valid")
+			}
 		}
 	}
+
+	actualHash := hasher.Sum(nil)
+	actualChecksum := fmt.Sprintf("%x", actualHash)
+	if expectedChecksum != actualChecksum {
+		return fmt.Errorf("sha256 integrity not satisfied, snapshot corrupted")
+	}
+	hasher.Reset()
+
+	err = snapshot.Truncate(contentSize)
+	if err != nil {
+		return fmt.Errorf("failed to truncate file: %w", err)
+	}
+	err = snapshot.Sync()
+	if err != nil {
+		return fmt.Errorf("failed to sync file after truncation: %w", err)
+	}
+
+	return nil
 }
 
 func handleError(w io.Writer, errInfo string) {
@@ -93,10 +154,17 @@ func handleConnection(conn net.Conn, kv map[string]string, logFile io.Writer) {
 }
 
 func StartServer(port uint64) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+
 	db := make(map[string]string)
 
 	if _, err := os.Stat("snapshot.log"); err == nil {
-		loadSnapshot(db, "snapshot.log")
+		err = loadSnapshot(db, "snapshot.log")
+		if err != nil {
+			fmt.Printf("CRITICAL: %s\n", err.Error())
+			os.Exit(2)
+		}
 	} else if os.IsNotExist(err) {
 		fmt.Println("snapshot not available :|")
 	}
@@ -107,6 +175,20 @@ func StartServer(port uint64) {
 		panic(err)
 	}
 	fmt.Println("server started on port 6969")
+
+	go func() {
+		<-c
+		fmt.Println("exiting server...")
+		lis.Close()
+		checksum, err := generateSHA256("snapshot.log")
+		if err != nil {
+			fmt.Println("ERROR: snapshot corrupted")
+			os.Exit(1)
+		}
+		fmt.Fprintf(snapshot, "SHA256: %x\n", checksum)
+		snapshot.Close()
+		os.Exit(0)
+	}()
 
 	for {
 		conn, err := lis.Accept()
