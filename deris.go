@@ -11,15 +11,6 @@ import (
 	"strings"
 )
 
-func generateSHA256(filename string) ([]byte, error) {
-	fileContent, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	checksum := sha256.Sum256(fileContent)
-	return checksum[:], nil
-}
-
 func loadSnapshot(kv map[string]string, logFile string) error {
 	fmt.Printf("loading data from %s :)\n", logFile)
 	snapshot, err := os.OpenFile(logFile, os.O_RDWR, 0644)
@@ -128,9 +119,10 @@ func handleConnection(conn net.Conn, kv map[string]string, logFile io.Writer) {
 				continue
 			}
 			// TODO: Make SET operation immutable
+			cmdLine := fmt.Sprintf("%s %s %s", cmd, args[1], args[2])
 			key, val := args[1], args[2]
 			kv[key] = val
-			fmt.Fprintf(logFile, fmt.Sprintf("%s %s %s\n", args[0], args[1], args[2]))
+			fmt.Fprintln(logFile, cmdLine)
 
 		// cmd: DEL <key>
 		case "DEL":
@@ -143,8 +135,9 @@ func handleConnection(conn net.Conn, kv map[string]string, logFile io.Writer) {
 				handleError(conn, fmt.Sprintf("key '%s' not present", args[1]))
 				continue
 			}
+			cmdLine := fmt.Sprintf("%s %s", cmd, args[1])
 			delete(kv, args[1])
-			fmt.Fprintf(logFile, fmt.Sprintf("%s %s\n", args[0], args[1]))
+			fmt.Fprintln(logFile, cmdLine)
 
 		case "EXIT":
 			fmt.Fprintln(conn, "-- Quitting session...")
@@ -153,14 +146,30 @@ func handleConnection(conn net.Conn, kv map[string]string, logFile io.Writer) {
 	}
 }
 
-func StartServer(port uint64) {
+func handleShutdown(c <-chan os.Signal, l net.Listener, logFile string, openLogFile io.Writer) {
+	<-c
+	fmt.Println("exiting server...")
+	l.Close()
+
+	fileContent, err := os.ReadFile(logFile)
+	if err != nil {
+		fmt.Println("ERROR: snapshot corrupted")
+		os.Exit(1)
+	}
+	checksum := sha256.Sum256(fileContent)
+	fmt.Fprintf(openLogFile, "SHA256: %x\n", checksum)
+
+	os.Exit(0)
+}
+
+func StartServer(port uint64, snapshotFile string) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 
 	db := make(map[string]string)
 
-	if _, err := os.Stat("snapshot.log"); err == nil {
-		err = loadSnapshot(db, "snapshot.log")
+	if _, err := os.Stat(snapshotFile); err == nil {
+		err = loadSnapshot(db, snapshotFile)
 		if err != nil {
 			fmt.Printf("CRITICAL: %s\n", err.Error())
 			os.Exit(2)
@@ -168,7 +177,8 @@ func StartServer(port uint64) {
 	} else if os.IsNotExist(err) {
 		fmt.Println("snapshot not available :|")
 	}
-	snapshot, _ := os.OpenFile("snapshot.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	snapshot, _ := os.OpenFile(snapshotFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	defer snapshot.Close()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -176,19 +186,7 @@ func StartServer(port uint64) {
 	}
 	fmt.Println("server started on port 6969")
 
-	go func() {
-		<-c
-		fmt.Println("exiting server...")
-		lis.Close()
-		checksum, err := generateSHA256("snapshot.log")
-		if err != nil {
-			fmt.Println("ERROR: snapshot corrupted")
-			os.Exit(1)
-		}
-		fmt.Fprintf(snapshot, "SHA256: %x\n", checksum)
-		snapshot.Close()
-		os.Exit(0)
-	}()
+	go handleShutdown(c, lis, snapshotFile, snapshot)
 
 	for {
 		conn, err := lis.Accept()
@@ -201,5 +199,5 @@ func StartServer(port uint64) {
 
 func main() {
 	var srvPort uint64 = 6969
-	StartServer(srvPort)
+	StartServer(srvPort, "snapshot.log")
 }
