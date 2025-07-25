@@ -184,7 +184,7 @@ func StartServer(port uint64, snapshotFile string) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("server started on port 6969")
+	fmt.Printf("server started on port %d\n", port)
 
 	go handleShutdown(c, lis, snapshotFile, snapshot)
 
