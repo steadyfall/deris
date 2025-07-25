@@ -196,8 +196,3 @@ func StartServer(port uint64, snapshotFile string) {
 		go handleConnection(conn, db, snapshot)
 	}
 }
-
-func main() {
-	var srvPort uint64 = 6969
-	StartServer(srvPort, "snapshot.log")
-}
